@@ -1327,8 +1327,20 @@ local socket = socket_init()
 local tcpClient = nil
 local reconnectCounter = 600
 local isEnabled = false
+local isDebugging = false
+local lastSubtitlesWriteTime = nil
 
 function timer_callback()
+    if lastSubtitlesWriteTime ~= nil and 5 < os.clock() - lastSubtitlesWriteTime then
+        if obs.obs_frontend_streaming_active() then
+            local output = obs.obs_frontend_get_streaming_output()
+            obs.obs_output_output_caption_text2(output, "", 0.1)
+            obs.obs_output_release(output)
+        end
+
+        lastSubtitlesWriteTime = nil
+    end
+
     if not isEnabled then
         if tcpClient ~= nil then
             tcp_close()
@@ -1361,12 +1373,16 @@ function timer_callback()
 
             chunk, err = tcpClient:receive(strLen)
 
-            if not obs.obs_frontend_streaming_active() then
-                return
-            end
-
             if chunk then
                 
+                if isDebugging then
+                    print(chunk)
+                end
+
+                if not obs.obs_frontend_streaming_active() then
+                    return
+                end
+
                 local speaker = string.match(chunk, "~fo|$title~(.+)~fo~")
                 local text = string.match(chunk, "~z~(.*)")
 
@@ -1387,14 +1403,20 @@ function timer_callback()
                 obs.obs_output_output_caption_text2(output, text, speechDuration)
                 obs.obs_output_release(output)
 
-                print(text)
+                lastSubtitlesWriteTime = os.clock()
 
             elseif err ~= "timeout" then
-                error(err)
+                if isDebugging then
+                    print(err)
+                end
+                tcp_close()
             end
 
         elseif err ~= "timeout" then
-            error(err)
+            if isDebugging then
+                print(err)
+            end
+            tcp_close()
         end
     end
 end
@@ -1404,37 +1426,46 @@ function tcp_connect(addr, port)
         tcp_close()
     end
 
-    print("connecting to " .. addr .. ":" .. tostring(port))
+    if isDebugging then
+        print("Connecting to " .. tostring(addr) .. ":" .. tostring(port))
+    end
     tcpClient = assert(socket.create("inet", "stream", "tcp"))
     assert(tcpClient:set_blocking(false))
     assert(tcpClient:connect(addr, port))
 end
 
 function tcp_close()
-    print("tcp closing")
     if tcpClient then
-        assert(tcpClient:close())
+        tcpClient:close()
         tcpClient = nil
+
+        if isDebugging then
+            print("Connection closed")
+        end
     end
-    print("tcp closed")
 end
 
 function script_load (settings)
-    print("script loaded")
-
     obs.timer_add(timer_callback, 100)
 end
 
 function script_unload ()
-    print("script unloaded")
-
     tcp_close();
 end
 
 function script_description ()
     return [[
-        <h1>Closed Captions Tcp Client</h1>
-        <p>Script that will try to connect to 127.0.0.1:32123 after which will listen for a subtitles</p>
+        <h1>RDR2 Subtitles to Closed Captions</h1>
+        <p>Script for OBS to connect to <a href="https://github.com/Kanawanagasaki/Rdr2TcpSubtitles">RDR2TcpSubtitles</a> mod</p>
+        <p>Installation:</p>
+        <ul>
+            <li>Download <b>ScriptHookRDR2</b> V2 from <a href="https://www.nexusmods.com/reddeadredemption2/mods/1472">here</a> and place the <u>ScriptHookRDR2.dll</u> file into your RDR2 root folder</li>
+            <li>Download <b>Mod Loader</b> from <a href="https://www.nexusmods.com/reddeadredemption2/mods/1472">here</a> and place the <u>dinput8.dll</u> file into your RDR2 root folder</li>
+            <li>Download <b>RDR2TcpSubtitles mod</b> from <a href="https://github.com/Kanawanagasaki/Rdr2TcpSubtitles/releases">here</a> and place the <u>Rdr2TcpSubtitles.asi</u> file into your RDR2 root folder</li>
+            <li>Download <b>RDR2TcpSubtitles obs script</b> from <a href="https://github.com/Kanawanagasaki/Rdr2TcpSubtitles/releases">here</a>. Then, open OBS, navigate to Tools > Scripts, and add <u>rdr2-obs-closed-captions-tcp-client.lua</u> script. Check <u>Enable</u> box to enable the script</li>
+            <li>In Red Dead Redemption set <b>Subtitles</b> setting to <u>off</u></li>
+            <li>If you're planning to stream on <span style="color: #ff0000">YouTube</span> and want to use closed captions, you'll need to adjust some settings before you start your stream. Go to the <b>YouTube Studio page &gt; Stream settings tab</b>, and make sure to turn on <b>Closed captions</b>. Caption source must be <u>Embedded 608/708</u></li>
+        </ul>
     ]]
 end
 
@@ -1442,13 +1473,16 @@ function script_properties ()
     --  create new properties
     local props = obs.obs_properties_create()
     obs.obs_properties_add_bool(props, "propEnableBool", "Enable")
+    obs.obs_properties_add_bool(props, "propDebugBool", "Debug")
     return props
 end
 
 function script_defaults (settings)
     obs.obs_data_set_default_bool(settings, "propEnableBool", false)
+    obs.obs_data_set_default_bool(settings, "propDebugBool", false)
 end
 
 function script_update (settings)
     isEnabled = obs.obs_data_get_bool(settings, "propEnableBool")
+    isDebugging = obs.obs_data_get_bool(settings, "propDebugBool")
 end

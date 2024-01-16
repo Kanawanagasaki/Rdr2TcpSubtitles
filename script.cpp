@@ -54,7 +54,7 @@ void runTcpServer()
 
 	while (isRunning)
 	{
-		auto tcpClient = accept(serverSd, NULL, NULL);
+		auto tcpClient = accept(serverSd, nullptr, nullptr);
 		if (tcpClient < 0)
 			continue;
 
@@ -66,21 +66,21 @@ void runTcpServer()
 bool isStringASubtitle(int idx)
 {
 	const char* subtitlePrefix = "~z~";
-	return strstr(subtitles[idx].text, subtitlePrefix) != NULL;
+	return strstr(subtitles[idx].text, subtitlePrefix) != nullptr;
 }
 
 int checkStringsIdx(int idx1, int idx2)
 {
-	if (subtitles[idx1].text == NULL)
+	if (subtitles[idx1].text == nullptr)
 		return -1;
 
 	if (!isStringASubtitle(idx1))
 		return -1;
 
-	if (subtitles[idx2].text == NULL)
+	if (subtitles[idx2].text == nullptr)
 		return idx1;
 
-	if (strstr(subtitles[idx2].text, subtitles[idx1].text) != NULL)
+	if (strstr(subtitles[idx2].text, subtitles[idx1].text) != nullptr)
 		return idx2;
 
 	return idx1;
@@ -112,6 +112,15 @@ int sendSubtitle(SOCKET tcpClient, int idx)
 	return sendRes;
 }
 
+bool areStringsEqual(const char* str1, const char* str2)
+{
+	if (str1 == str2)
+		return true;
+	if (str1 == nullptr || str2 == nullptr)
+		return false;
+	return strcmp(str1, str2) == 0;
+}
+
 void tick()
 {
 	std::lock_guard<std::mutex> lock(tcpClientsLock);
@@ -119,7 +128,10 @@ void tick()
 	int idxToSend = -1;
 	for (int i = 0; i < SUBTITLES_ARR_SIZE; i++)
 	{
-		if (subtitlesBuffer[i] != subtitles[i].text)
+		if (subtitles[i].text == nullptr)
+			continue;
+
+		if (!areStringsEqual(subtitles[i].text, subtitlesBuffer[i]))
 		{
 			subtitlesBuffer[i] = subtitles[i].text;
 
@@ -153,7 +165,7 @@ void ScriptMain()
 {
 	std::thread t(&runTcpServer);
 
-	auto hBaseAddr = (UINT_PTR)GetModuleHandle(NULL);
+	auto hBaseAddr = (UINT_PTR)GetModuleHandle(nullptr);
 	subtitles = (s_subtitle*)(hBaseAddr + 0x4A66040L);
 
 	for (int i = 0; i < SUBTITLES_ARR_SIZE; i++)
