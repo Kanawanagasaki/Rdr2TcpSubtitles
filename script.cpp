@@ -9,6 +9,8 @@
 #include <charconv>
 #include <thread>
 #include <mutex>
+#include <psapi.h>
+#include <windows.h>
 
 const int SUBTITLES_ARR_SIZE = 512;
 const int SERVER_PORT = 32123;
@@ -161,12 +163,75 @@ void tick()
 	}
 }
 
+// https://github.com/scripthookvdotnet/scripthookvdotnet/blob/main/source/core/NativeMemory.cs#L206
+std::vector<int> CreateShiftTableForBmh(const std::vector<int>& pattern) {
+	std::vector<int> skipTable(256);
+	int lastIndex = pattern.size() - 1;
+
+	auto it = std::find(pattern.rbegin(), pattern.rend(), -1);
+	int diff = lastIndex - (it != pattern.rend() ? pattern.rend() - it - 1 : 0);
+	if (diff == 0)
+		diff = 1;
+
+	for (int i = 0; i < skipTable.size(); i++)
+		skipTable[i] = diff;
+
+	for (int i = lastIndex - diff; i < lastIndex; i++)
+	{
+		short patternVal = pattern[i];
+		if (patternVal >= 0)
+			skipTable[patternVal] = lastIndex - i;
+	}
+
+	return skipTable;
+}
+
 void ScriptMain()
 {
 	std::thread t(&runTcpServer);
 
-	auto hBaseAddr = (UINT_PTR)GetModuleHandle(nullptr);
-	subtitles = (s_subtitle*)(hBaseAddr + 0x4A66050L);
+	std::vector<int> pattern = { 0x8B, 0x0D, -1, -1, -1, -1, 0x48, 0x8D, 0x3D, -1, -1, -1, -1, 0x48, 0x63, 0x05, -1, -1, -1, -1, 0x3B, 0xC8, 0x72 };
+
+	// https://github.com/scripthookvdotnet/scripthookvdotnet/blob/main/source/core/NativeMemory.cs#L157
+	HANDLE hProcess = GetCurrentProcess();
+	HMODULE hModule = GetModuleHandle(nullptr);
+	MODULEINFO moduleInfo;
+
+	if (GetModuleInformation(hProcess, hModule, &moduleInfo, sizeof(moduleInfo)))
+	{
+		DWORD moduleSize = moduleInfo.SizeOfImage;
+		char* startAddr = (char*)hModule;
+		char* endAddr = startAddr + moduleSize;
+
+		int lastPatternIndex = pattern.size() - 1;
+		std::vector<int> skipTable = CreateShiftTableForBmh(pattern);
+
+		auto endAddressToScan = endAddr - pattern.size();
+
+		for (char* curHeadAddress = startAddr;
+			curHeadAddress <= endAddressToScan;
+			curHeadAddress += (skipTable[static_cast<unsigned char>(curHeadAddress[lastPatternIndex])] > 1)
+			? skipTable[static_cast<unsigned char>(curHeadAddress[lastPatternIndex])]
+			: 1)
+		{
+
+			for (int i = lastPatternIndex; pattern[i] < 0 || static_cast<unsigned char>(curHeadAddress[i]) == pattern[i]; --i)
+			{
+				if (i == 0)
+				{
+					auto offset = *(DWORD*)(curHeadAddress + 9);
+					subtitles = (s_subtitle*)(curHeadAddress + offset + 13);
+
+					goto skip_static_offset;
+				}
+			}
+		}
+	}
+
+	subtitles = (s_subtitle*)((UINT_PTR)hModule + 0x4A66050L);
+
+skip_static_offset:
+	CloseHandle(hProcess);
 
 	for (int i = 0; i < SUBTITLES_ARR_SIZE; i++)
 		subtitlesBuffer[i] = subtitles[i].text;
