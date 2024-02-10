@@ -186,52 +186,70 @@ std::vector<int> CreateShiftTableForBmh(const std::vector<int>& pattern) {
 	return skipTable;
 }
 
+// https://github.com/ThirteenAG/Hooking.Patterns/blob/master/Hooking.Patterns.cpp#L113-L117
+template<typename TReturn, typename TOffset>
+TReturn* getRVA(ptrdiff_t baseAddr, TOffset rva)
+{
+	return (TReturn*)(baseAddr + rva);
+}
+
 void ScriptMain()
 {
 	std::thread t(&runTcpServer);
 
 	std::vector<int> pattern = { 0x8B, 0x0D, -1, -1, -1, -1, 0x48, 0x8D, 0x3D, -1, -1, -1, -1, 0x48, 0x63, 0x05, -1, -1, -1, -1, 0x3B, 0xC8, 0x72 };
 
-	// https://github.com/scripthookvdotnet/scripthookvdotnet/blob/main/source/core/NativeMemory.cs#L157
-	HANDLE hProcess = GetCurrentProcess();
-	HMODULE hModule = GetModuleHandle(nullptr);
-	MODULEINFO moduleInfo;
+	ptrdiff_t baseAddr = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+	uintptr_t endAddr;
 
-	if (GetModuleInformation(hProcess, hModule, &moduleInfo, sizeof(moduleInfo)))
-	{
-		DWORD moduleSize = moduleInfo.SizeOfImage;
-		char* startAddr = (char*)hModule;
-		char* endAddr = startAddr + moduleSize;
-
-		int lastPatternIndex = pattern.size() - 1;
-		std::vector<int> skipTable = CreateShiftTableForBmh(pattern);
-
-		auto endAddressToScan = endAddr - pattern.size();
-
-		for (char* curHeadAddress = startAddr;
-			curHeadAddress <= endAddressToScan;
-			curHeadAddress += (skipTable[static_cast<unsigned char>(curHeadAddress[lastPatternIndex])] > 1)
-			? skipTable[static_cast<unsigned char>(curHeadAddress[lastPatternIndex])]
-			: 1)
+	// https://github.com/ThirteenAG/Hooking.Patterns/blob/master/Hooking.Patterns.cpp#L123-L142
+	static auto getSection = [](const PIMAGE_NT_HEADERS nt_headers, unsigned section) -> PIMAGE_SECTION_HEADER
 		{
+			return reinterpret_cast<PIMAGE_SECTION_HEADER>(
+				(UCHAR*)nt_headers->OptionalHeader.DataDirectory +
+				nt_headers->OptionalHeader.NumberOfRvaAndSizes * sizeof(IMAGE_DATA_DIRECTORY) +
+				section * sizeof(IMAGE_SECTION_HEADER));
+		};
 
-			for (int i = lastPatternIndex; pattern[i] < 0 || static_cast<unsigned char>(curHeadAddress[i]) == pattern[i]; --i)
+	PIMAGE_DOS_HEADER dosHeader = getRVA<IMAGE_DOS_HEADER>(baseAddr, 0);
+	PIMAGE_NT_HEADERS ntHeader = getRVA<IMAGE_NT_HEADERS>(baseAddr, dosHeader->e_lfanew);
+	for (int i = 0; i < ntHeader->FileHeader.NumberOfSections; i++)
+	{
+		auto sec = getSection(ntHeader, i);
+		auto secSize = sec->SizeOfRawData != 0 ? sec->SizeOfRawData : sec->Misc.VirtualSize;
+		if (sec->Characteristics & IMAGE_SCN_MEM_EXECUTE)
+			endAddr = baseAddr + sec->VirtualAddress + secSize;
+		if ((i == ntHeader->FileHeader.NumberOfSections - 1) && endAddr == 0)
+			endAddr = baseAddr + sec->PointerToRawData + secSize;
+	}
+
+	int lastPatternIndex = pattern.size() - 1;
+	std::vector<int> skipTable = CreateShiftTableForBmh(pattern);
+
+	auto endAddressToScan = reinterpret_cast<char*>(endAddr - pattern.size());
+
+	// https://github.com/scripthookvdotnet/scripthookvdotnet/blob/main/source/core/NativeMemory.cs#L157
+	for (char* curHeadAddress = (char*)baseAddr;
+		curHeadAddress <= endAddressToScan;
+		curHeadAddress += (skipTable[static_cast<unsigned char>(curHeadAddress[lastPatternIndex])] > 1)
+		? skipTable[static_cast<unsigned char>(curHeadAddress[lastPatternIndex])]
+		: 1)
+	{
+		for (int i = lastPatternIndex; pattern[i] < 0 || static_cast<unsigned char>(curHeadAddress[i]) == pattern[i]; --i)
+		{
+			if (i == 0)
 			{
-				if (i == 0)
-				{
-					auto offset = *(DWORD*)(curHeadAddress + 9);
-					subtitles = (s_subtitle*)(curHeadAddress + offset + 13);
+				auto offset = *(DWORD*)(curHeadAddress + 9);
+				subtitles = (s_subtitle*)(curHeadAddress + offset + 13);
 
-					goto skip_static_offset;
-				}
+				goto skip_static_offset;
 			}
 		}
 	}
 
-	subtitles = (s_subtitle*)((UINT_PTR)hModule + 0x4A66050L);
+	subtitles = (s_subtitle*)(baseAddr + 0x4A66050L);
 
 skip_static_offset:
-	CloseHandle(hProcess);
 
 	for (int i = 0; i < SUBTITLES_ARR_SIZE; i++)
 		subtitlesBuffer[i] = subtitles[i].text;
