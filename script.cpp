@@ -166,7 +166,7 @@ void ScriptMain()
 	std::thread t(&runTcpServer);
 
 	auto hBaseAddr = (UINT_PTR)GetModuleHandle(nullptr);
-	subtitles = (s_subtitle*)(hBaseAddr + 0x4A66040L);
+	subtitles = (s_subtitle*)(hBaseAddr + 0x4A66050L);
 
 	for (int i = 0; i < SUBTITLES_ARR_SIZE; i++)
 		subtitlesBuffer[i] = subtitles[i].text;
